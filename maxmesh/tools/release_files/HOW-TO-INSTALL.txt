@@ -1,0 +1,54 @@
+maxmesh v{VER}  -  MeshCore firmware with a full on-device UI for the LilyGo T-Deck MAX
+=======================================================================================
+
+FILES
+  maxmesh-v{VER}-factory.bin   Fresh install / factory reset. Flash at address 0x0 after a full erase.
+  maxmesh-v{VER}-update.bin    Upgrade only. Flash at address 0x10000. Keeps contacts, channels, messages.
+  flash-maxmesh.ps1            Windows installer (does the erase + flash for you).
+
+A fresh install leaves the device like new: no name, contacts, messages or keys.
+It creates a brand-new identity (new public key) on first start.
+
+
+METHOD 1 - Windows installer (needs Python 3 from python.org)
+  1. Plug the T-Deck MAX into the PC with a data USB-C cable.
+  2. Right-click flash-maxmesh.ps1 -> "Run with PowerShell", type YES when asked.
+     (If Windows blocks the script: open PowerShell in this folder and run
+        powershell -ExecutionPolicy Bypass -File .\flash-maxmesh.ps1        )
+  Upgrade without erasing:  powershell -ExecutionPolicy Bypass -File .\flash-maxmesh.ps1 -Update
+
+
+METHOD 2 - Browser only (Chrome or Edge, nothing to install)
+  1. Open https://espressif.github.io/esptool-js/
+  2. Baudrate 921600 -> Connect -> pick the T-Deck's port ("USB JTAG/serial debug unit").
+  3. Click "Erase Flash" and wait for it to finish.
+  4. Flash Address 0x0, choose maxmesh-v{VER}-factory.bin, click "Program".
+  5. When done, tap the side rocker DOWN (reset).
+
+
+IF THE DEVICE ISN'T FOUND ON USB
+  Hold the side rocker UP (BOOT), tap the rocker DOWN (reset), then release BOOT.
+  This forces download mode; try again.
+
+
+FIRST START
+  - First boot takes about a minute while storage is prepared.
+  - It asks for your name (Enter to save).
+  - Radio defaults to the USA/Canada preset (910.525 MHz). Settings -> Radio preset to change.
+  - Set Settings -> Timezone (e.g. -8 for Pacific), and the clock if GPS/app hasn't set it.
+  - Optional: copy channels + favourite contacts from a MeshCore app export with
+    maxmesh\tools\import_json.py (in the maxmesh source).
+
+
+QUICK KEYS
+  Lists: W/S move, A/D page, Enter open, Q or Backspace back, letters = shortcuts on Home
+  Touch keys: heart = up, plane = down, HOLD = jump to oldest / newest
+  Chat: type + Enter send; Enter on empty box = newest; Alt+W/S scroll; Alt+K add word to dictionary
+  Sym = symbol (hold or double-tap to lock), Shift = capital (double-tap = caps lock)
+  Mic = keyboard light, $ = screen light, Alt+H = home, Alt+L = lock
+  Side rocker UP: tap = lock/unlock, hold 3 s = power off.  Rocker DOWN = reset.
+
+
+CREDITS / LICENCES
+  Built on MeshCore (MIT, meshcore-dev/MeshCore). Uses GxEPD2 (GPL-3.0), RadioLib (MIT) and
+  the SCOWL word list (permissive, wordlist.aspell.net). Source: the maxmesh project folder.

@@ -1,3 +1,7 @@
+> **This fork is _maxmesh_**: MeshCore with a full on-device UI for the LilyGo T-Deck MAX.
+> See **[maxmesh/README.md](maxmesh/README.md)** for features, install and build instructions.
+> Everything below is the original MeshCore README.
+
 ## About MeshCore
 
 MeshCore is a lightweight, portable C++ library that enables multi-hop packet routing for embedded projects using LoRa and other packet radios. It is designed for developers who want to create resilient, decentralized communication networks that work without the internet.

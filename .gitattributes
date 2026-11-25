@@ -1,0 +1,2 @@
+# spell-check word list is embedded in the firmware and binary-searched: keep LF on every platform
+examples/companion_radio/ui-max/spell_words.txt -text

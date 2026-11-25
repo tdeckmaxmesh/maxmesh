@@ -17,3 +17,12 @@ compile_commands.json
 .venv/
 venv/
 platformio.local.ini
+
+# ---- maxmesh ----
+maxmesh/release/
+# personal data that must never be committed
+*meshcore_config*.json
+Screenshot_*
+*.png
+!logo/*.png
+maxmesh/tools/__pycache__/

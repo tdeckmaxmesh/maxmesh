@@ -105,6 +105,9 @@ public:
       virtual void onTraceRecv(mesh::Packet *pkt, uint32_t tag, uint32_t auth_code, uint8_t flags,
                                const uint8_t *path_snrs, const uint8_t *path_hashes, uint8_t path_len) { }
       virtual void onRawDataRecv(mesh::Packet *pkt) { }
+      // room-server posts: 'author_prefix' is the 4-byte pub-key prefix of the original poster
+      virtual void onSignedMessageRecv(mesh::Packet *pkt, const ContactInfo &from, uint32_t sender_timestamp,
+                                       const uint8_t* author_prefix, const char* text) { }
       virtual ~Listener() { }
   };
 
@@ -214,6 +217,17 @@ public:
 
   // To check if there is pending work
   bool hasPendingWork() const;
+
+  // ---- helpers for on-device (standalone) UIs ----
+  void uiSaveChannels() { saveChannels(); }
+  void uiSaveContactsSoon();
+  void uiDeleteContactBlob(const uint8_t* pub_key) { _store->deleteBlobByKey(pub_key, PUB_KEY_SIZE); }
+  void uiStartConnection(const ContactInfo& contact, uint16_t keep_alive_secs) { startConnection(contact, keep_alive_secs); }
+  void uiStopConnection(const uint8_t* pub_key) { stopConnection(pub_key); }
+  bool uiFloodAdvert();
+  void uiApplyRadioParams();
+  bool uiLocalCommand(const char* cmd, char* reply) { reply[0] = 0; return handleCommand(cmd, 0, reply); }
+  int  uiOfflineQueueLen() const { return offline_queue_len; }
 
 private:
   void writeOKFrame();
