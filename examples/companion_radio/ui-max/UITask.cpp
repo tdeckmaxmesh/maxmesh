@@ -742,7 +742,7 @@ void UITask::handleButton() {
     board.powerOff();
   }
   if (!down && _btn_prev && !_btn_long_done && now - _btn_down > 30) {
-    if (_scr == SCR_LOCK) back(); else { _modal = MODAL_NONE; go(SCR_LOCK); _need_full = true; }
+    if (_scr == SCR_LOCK) back(); else { go(SCR_LOCK); _need_full = true; }
     applyLights();
     _last_input = now;
   }
@@ -916,6 +916,23 @@ void UITask::serialCommand(char* line) {
   if (strcmp(line, "!pinwatch off") == 0) { s_pinwatch = false; Serial.println("OK"); return; }
   if (strcmp(line, "!keylog on") == 0) { keyboard.log_raw = touch.log_raw = true; Serial.printf("OK touch=%d\n", touch.isReady()); return; }
   if (strcmp(line, "!keylog off") == 0) { keyboard.log_raw = touch.log_raw = false; Serial.println("OK"); return; }
+  if (strcmp(line, "!unlock") == 0) {           // test console: same as pressing the side button
+    if (_scr == SCR_LOCK) { back(); applyLights(); _need_full = true; _last_input = millis(); }
+    Serial.println("OK");
+    return;
+  }
+  if (strncmp(line, "!settime ", 9) == 0) {      // !settime <unix epoch, UTC>  (e.g. from a PC)
+    uint32_t t = strtoul(line + 9, nullptr, 10);
+    if (t > 1700000000UL) { rtc_clock.setCurrentTime(t); _dirty = true; Serial.printf("OK clock=%u\n", (unsigned)rtc_clock.getCurrentTime()); }
+    else Serial.println("ERR time");
+    return;
+  }
+  if (strcmp(line, "!i2cscan") == 0) {
+    Serial.print("I2C:");
+    for (uint8_t a = 1; a < 127; a++) { Wire.beginTransmission(a); if (Wire.endTransmission() == 0) Serial.printf(" %02X", a); }
+    Serial.println();
+    return;
+  }
   if (strcmp(line, "!buzz") == 0) { board.buzz(14); Serial.println("OK"); return; }
   Serial.println("? commands: !status !shot !keys <text> !buzz");
 }
@@ -934,7 +951,7 @@ void UITask::loop() {
     if (k == MK_ALT + 't') k = MK_TOP;      // top
     bc_key = k; bc_scr = _scr; bc_modal = _modal; bcMark(BC_KEY);
     if (_scr == SCR_LOCK) continue;   // locked: only the side (BOOT) button unlocks
-    if (k == MK_ALT + 'l') { _modal = MODAL_NONE; go(SCR_LOCK); applyLights(); _need_full = true; continue; }
+    if (k == MK_ALT + 'l') { go(SCR_LOCK); applyLights(); _need_full = true; continue; }
     if (keyboard.log_raw) Serial.printf("KEY decoded=%d '%c'\n", k, (k >= 32 && k < 127) ? k : '?');
     if (k == MK_MIC) {
       _cfg.kb_light = !_cfg.kb_light; applyLights(); saveCfg();
@@ -991,8 +1008,7 @@ void UITask::loop() {
 
   // auto-lock
   if (_cfg.lock_secs && _scr != SCR_LOCK && now - _last_input > (uint32_t)_cfg.lock_secs * 1000UL) {
-    _modal = MODAL_NONE;
-    go(SCR_LOCK);
+    go(SCR_LOCK);          // an open dialog (and what was typed) is kept for after unlocking
     applyLights();
     _need_full = true;
   }
