@@ -59,6 +59,18 @@ void TDeckMaxBoard::begin() {
   pinMode(MAX_BOOT_BTN, INPUT_PULLUP);
   pinMode(MAX_KB_INT, INPUT_PULLUP);
 
+  // A panic/watchdog reboot only resets the CPU, not the GPIO block: light-sleep
+  // wake-up settings (level interrupts on the keyboard/button/LoRa pins) can survive
+  // it and, with a line held active, flood the chip with interrupts -> crash loop.
+  // Always start from clean pin interrupt settings.
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+  const gpio_num_t wake_pins[] = { (gpio_num_t)MAX_KB_INT, (gpio_num_t)MAX_BOOT_BTN, (gpio_num_t)P_LORA_DIO_1 };
+  for (gpio_num_t p : wake_pins) {
+    gpio_wakeup_disable(p);
+    gpio_set_intr_type(p, GPIO_INTR_DISABLE);
+    gpio_intr_disable(p);
+  }
+
   // Recover from a deep-sleep power-off (LoRa CS was held high)
   if (esp_reset_reason() == ESP_RST_DEEPSLEEP) {
     rtc_gpio_hold_dis((gpio_num_t)P_LORA_NSS);

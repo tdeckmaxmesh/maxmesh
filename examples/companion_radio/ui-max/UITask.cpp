@@ -20,13 +20,18 @@ unsigned int decode_base64(const unsigned char* input, unsigned int input_length
 
 extern UITask ui_task;
 
+// The main loop can get deep: an e-paper refresh keeps the mesh running from its busy
+// callback, so drawing + packet handling + contact/file saves can all be on the stack at
+// once. 8 KB (Arduino default) overflowed in the field; give it 16 KB.
+SET_LOOP_TASK_STACK_SIZE(16 * 1024);
+
 // ---- crash breadcrumbs: survive a panic/watchdog reboot (not a power loss) ----
 #include <esp_system.h>
 #define BC_MAGIC 0xB4EADC0D
 RTC_NOINIT_ATTR static uint32_t bc_magic, bc_key, bc_scr, bc_stage, bc_modal, bc_crashes;
 static uint32_t bc_prev_key, bc_prev_scr, bc_prev_stage, bc_prev_modal;
 static int bc_reason = -1;
-enum { BC_IDLE = 0, BC_KEY = 1, BC_RENDER = 2, BC_MESH_IN_REFRESH = 3, BC_SAVE = 4 };
+enum { BC_IDLE = 0, BC_KEY = 1, BC_RENDER = 2, BC_MESH_IN_REFRESH = 3, BC_SAVE = 4, BC_SLEEP = 5 };
 static inline void bcMark(uint32_t stage) { bc_stage = stage; }
 
 #define W 240
@@ -813,6 +818,8 @@ void UITask::printStatus() {
   Serial.printf(" clock=%u valid=%d heap=%u psram=%u spiffs=%u/%u refreshes=%u\n", (unsigned)rtc_clock.getCurrentTime(), clockValid(),
                 (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getFreePsram(), (unsigned)SPIFFS.usedBytes(), (unsigned)SPIFFS.totalBytes(),
                 (unsigned)_disp->refreshCount());
+  Serial.printf(" stack: loop task min free %u of %u bytes\n",
+                (unsigned)uxTaskGetStackHighWaterMark(NULL), (unsigned)getArduinoLoopTaskStackSize());
   LocationProvider* lp = ((EnvironmentSensorManager*)_sensors)->getLocationProvider();
   if (lp) { char d[160]; lp->formatDiagnostics(d, sizeof(d)); Serial.printf(" gps: %s\n", d); }
   Serial.println(" end");
@@ -1041,7 +1048,9 @@ void UITask::loop() {
     uint32_t secs = rtc_clock.getCurrentTime() % 60;
     uint32_t ms = (60 - secs) * 1000;            // wake for the next clock minute
     if (_toast[0]) ms = 500;
+    bcMark(BC_SLEEP);
     board.lightSleepUntilEvent(min(ms, (uint32_t)30000));
+    bcMark(BC_IDLE);
   }
 }
 
