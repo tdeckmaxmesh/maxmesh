@@ -1,6 +1,11 @@
-> **maxmesh — LilyGo T-Deck MAX firmware.** This fork is _maxmesh_: MeshCore with a full on-device keyboard + e-paper UI for the T-Deck MAX.
-> See **[maxmesh/README.md](maxmesh/README.md)** for features, install and build instructions.
-> Everything below is the original MeshCore README.
+> # maxmesh — LilyGo T-Deck MAX firmware
+> Free, open-source firmware that turns the **LilyGo T-Deck MAX** into a standalone mesh messenger
+> with a full keyboard + e-paper interface. **[Download the latest release](https://github.com/tdeckmaxmesh/maxmesh/releases/latest)** ·
+> **[Features, controls, install & build guide](maxmesh/README.md)**
+>
+> maxmesh is built on **[MeshCore](https://github.com/meshcore-dev/MeshCore)** by Scott Powell and the
+> MeshCore contributors (MIT licence), which provides the mesh networking underneath and makes maxmesh
+> compatible with every MeshCore device and app. Thank you! Everything below is the original MeshCore README.
 
 ## About MeshCore
 

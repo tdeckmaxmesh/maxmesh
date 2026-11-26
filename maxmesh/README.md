@@ -4,9 +4,11 @@
 into a complete standalone [MeshCore](https://github.com/meshcore-dev/MeshCore) messenger, like the
 regular T-Deck firmware, while still letting the MeshCore phone app pair over Bluetooth at the same time.
 
-It is built directly on upstream MeshCore (v1.18.0 companion-radio core) with a new T-Deck MAX board
-port and a keyboard/e-paper UI. The changes to upstream code are small and additive, so newer MeshCore
-releases can be merged in.
+maxmesh is free and open source. It adds its own T-Deck MAX hardware support and keyboard/e-paper
+interface on top of **[MeshCore](https://github.com/meshcore-dev/MeshCore)** (v1.18.0 companion-radio core,
+MIT licence), which does the mesh networking and keeps maxmesh compatible with all MeshCore devices and
+apps. The changes to MeshCore's own code are small and additive, so newer MeshCore releases can be merged in.
+Full credits are at the bottom of this page.
 
 > Status: beta. Tested on one T-Deck MAX on a live US mesh.
 
