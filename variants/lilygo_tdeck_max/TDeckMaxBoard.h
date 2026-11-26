@@ -92,6 +92,9 @@ public:
   // power
   void powerOff() override;          // deep sleep, wake on BOOT button
   void lightSleepUntilEvent(uint32_t max_ms);   // wake on LoRa / key / button / timer
+  // Side (BOOT) button presses are latched by an interrupt so short taps are never missed
+  // (e.g. during an e-paper refresh or while waking from light sleep).
+  bool takeButtonPress();
 
   const char* getManufacturerName() const override { return "LilyGo T-Deck MAX"; }
 };

@@ -115,6 +115,7 @@ class UITask : public AbstractUITask {
   uint32_t _btn_down = 0;
   bool _btn_prev = false;
   bool _btn_long_done = false;
+  uint32_t _btn_last_toggle = 0;
   bool _gps_pow = false;
   uint32_t _boot_ms = 0;
   bool _in_busy = false;

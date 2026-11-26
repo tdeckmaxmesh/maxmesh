@@ -13,6 +13,10 @@
 #include <Arduino.h>
 #include <Wire.h>
 
+#ifndef TOUCH_HOLD_MS
+  #define TOUCH_HOLD_MS 1500   // hold heart/plane this long to jump to oldest/newest
+#endif
+
 namespace { volatile bool _max_touch_irq = false; void IRAM_ATTR _maxTouchIsr() { _max_touch_irq = true; } }
 
 class MaxTouch {
@@ -52,8 +56,8 @@ public:
   // Returns key id (0..2) on a new PRESS, -1 otherwise.
   int poll() {
     if (!_ok) return -1;
-    // long press: a key held ~0.6 s reports once as 16 + id
-    if (_key_down >= 0 && !_long_sent && millis() - _down_ms > 600) { _long_sent = true; return 16 + _key_down; }
+    // long press: a key held TOUCH_HOLD_MS reports once as 16 + id (fast jump)
+    if (_key_down >= 0 && !_long_sent && millis() - _down_ms > TOUCH_HOLD_MS) { _long_sent = true; return 16 + _key_down; }
     if (!_max_touch_irq && digitalRead(_int_pin) == HIGH) return -1;
     _max_touch_irq = false;
 

@@ -27,6 +27,15 @@
 #define DRV_FEEDBACK 0x1A
 #define DRV_CONTROL3 0x1D
 
+static volatile bool s_btn_pressed = false;
+static void IRAM_ATTR buttonIsr() { s_btn_pressed = true; }
+
+bool TDeckMaxBoard::takeButtonPress() {
+  bool p = s_btn_pressed;
+  s_btn_pressed = false;
+  return p;
+}
+
 static bool i2cPresent(uint8_t addr) {
   Wire.beginTransmission(addr);
   return Wire.endTransmission() == 0;
@@ -70,6 +79,9 @@ void TDeckMaxBoard::begin() {
     gpio_set_intr_type(p, GPIO_INTR_DISABLE);
     gpio_intr_disable(p);
   }
+
+  // side button: falling-edge latch (an edge interrupt can't flood like a level one)
+  attachInterrupt(MAX_BOOT_BTN, buttonIsr, FALLING);
 
   // Recover from a deep-sleep power-off (LoRa CS was held high)
   if (esp_reset_reason() == ESP_RST_DEEPSLEEP) {
@@ -248,7 +260,8 @@ void TDeckMaxBoard::lightSleepUntilEvent(uint32_t max_ms) {
   gpio_wakeup_disable((gpio_num_t)MAX_KB_INT);
   gpio_wakeup_disable((gpio_num_t)MAX_BOOT_BTN);
   gpio_set_intr_type((gpio_num_t)MAX_KB_INT, GPIO_INTR_DISABLE);      // polled, no ISR
-  gpio_set_intr_type((gpio_num_t)MAX_BOOT_BTN, GPIO_INTR_DISABLE);    // polled, no ISR
+  gpio_set_intr_type((gpio_num_t)MAX_BOOT_BTN, GPIO_INTR_NEGEDGE);    // back to the press latch
+  if (gpio_get_level((gpio_num_t)MAX_BOOT_BTN) == 0) s_btn_pressed = true;   // the press that woke us
   gpio_set_intr_type((gpio_num_t)P_LORA_DIO_1, GPIO_INTR_POSEDGE);    // RadioLib's rising-edge ISR
   portEXIT_CRITICAL(&mux);
 }

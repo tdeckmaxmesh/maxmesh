@@ -714,6 +714,13 @@ bool UITask::onUnhandledResponse(const ContactInfo& from, uint32_t tag, const ui
 void UITask::usbPluggedAfterSleep() {
   _store.saveIfNeeded(true);
   the_mesh.savePrefs();
+  // say what's happening, so the restart doesn't look like a crash
+  _disp->startFrame();
+  g().setTextColor(BLACK);
+  font(2); g().setCursor((W - textW("USB connected")) / 2, 145); g().print("USB connected");
+  font(1); g().setCursor((W - textW("Restarting so the PC")) / 2, 175); g().print("Restarting so the PC");
+  g().setCursor((W - textW("can connect...")) / 2, 195); g().print("can connect...");
+  _disp->commit();
   delay(50);
   ESP.restart();
 }
@@ -730,8 +737,9 @@ void UITask::busyPoll() {
 
 void UITask::handleButton() {
   bool down = digitalRead(MAX_BOOT_BTN) == LOW;
+  bool latched = board.takeButtonPress();      // catches taps we were too busy/asleep to see
   uint32_t now = millis();
-  if (down && !_btn_prev) { _btn_down = now; _btn_long_done = false; }
+  if ((down || latched) && !_btn_prev) { _btn_down = now; _btn_long_done = false; _btn_prev = true; }
   if (down && !_btn_long_done && now - _btn_down > 2500) {
     _btn_long_done = true;
     // power off
@@ -746,12 +754,18 @@ void UITask::handleButton() {
     _disp->commit();
     board.powerOff();
   }
-  if (!down && _btn_prev && !_btn_long_done && now - _btn_down > 30) {
-    if (_scr == SCR_LOCK) back(); else { go(SCR_LOCK); _need_full = true; }
-    applyLights();
-    _last_input = now;
+  if (!down && _btn_prev) {                    // released (or a tap seen only via the latch)
+    _btn_prev = false;
+    // ignore contact bounce / impatient double-presses right after a lock or unlock
+    if (!_btn_long_done && now - _btn_last_toggle > 800) {
+      _btn_last_toggle = now;
+      if (_scr == SCR_LOCK) back();            // unlock: quick partial refresh
+      else { go(SCR_LOCK); _need_full = true; }   // lock: clean full refresh
+      applyLights();
+      _last_input = now;
+      _dirty = true;
+    }
   }
-  _btn_prev = down;
 }
 
 // ---------------- button discovery (diagnostics) ----------------
@@ -924,7 +938,7 @@ void UITask::serialCommand(char* line) {
   if (strcmp(line, "!keylog on") == 0) { keyboard.log_raw = touch.log_raw = true; Serial.printf("OK touch=%d\n", touch.isReady()); return; }
   if (strcmp(line, "!keylog off") == 0) { keyboard.log_raw = touch.log_raw = false; Serial.println("OK"); return; }
   if (strcmp(line, "!unlock") == 0) {           // test console: same as pressing the side button
-    if (_scr == SCR_LOCK) { back(); applyLights(); _need_full = true; _last_input = millis(); }
+    if (_scr == SCR_LOCK) { back(); applyLights(); _last_input = millis(); }
     Serial.println("OK");
     return;
   }
