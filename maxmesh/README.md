@@ -10,7 +10,7 @@ MIT licence), which does the mesh networking and keeps maxmesh compatible with a
 apps. The changes to MeshCore's own code are small and additive, so newer MeshCore releases can be merged in.
 Full credits are at the bottom of this page.
 
-> Status: beta. Tested on one T-Deck MAX on a live US mesh.
+> **Status: beta — work in progress.** Tested daily on one T-Deck MAX on a live US mesh; new versions come out as issues are found and fixed. Please report problems in Issues.
 
 ## Install
 
@@ -40,7 +40,8 @@ If the device doesn't show up on USB: hold the side rocker **up** (BOOT), tap it
 - **Settings**: name, radio presets or custom freq/BW/SF/CR, TX power, antenna, Bluetooth + fixed PIN,
   vibration, frontlight, keyboard light, auto-lock, timezone, clock, e-ink refresh
 - **Lock screen** with unread summary; message history saved across reboots (crash-safe writes)
-- **Battery**: 80 MHz CPU, unused hardware powered off, light sleep between events when Bluetooth is off
+- **Battery**: 80 MHz CPU, unused hardware powered off, light sleep between events when Bluetooth is off;
+  low-battery warning at 3.5 V and automatic safe power-off below 3.35 V (messages saved)
 
 ## Controls
 
