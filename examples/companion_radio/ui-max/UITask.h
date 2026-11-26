@@ -122,6 +122,11 @@ class UITask : public AbstractUITask {
   bool _has_slept = false;    // light-sleep breaks the USB link until a restart
   uint32_t _time_saved_at = 0;
   void usbPluggedAfterSleep();
+  void checkLowBattery(bool at_boot);
+  void lowBatteryShutdown();
+  uint16_t _fake_batt_mv = 0;   // test console: simulate a battery voltage
+  uint8_t _low_count = 0;
+  bool _low_warned = false;
 
   // serial test console ("!status", "!keys ...", "!shot")
   char _ser[200];

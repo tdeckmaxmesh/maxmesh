@@ -177,6 +177,7 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   applyLights();
   gpsPowerSync();
   readBattery();
+  checkLowBattery(true);     // too flat to run: save and power straight back off
 
   _boot_ms = millis();
   _last_input = millis();
@@ -233,6 +234,46 @@ void UITask::readBattery() {
   _batt_pct = board.getBattPercent();
   _batt_ma = board.getBattCurrentMA();
   _usb = board.isUsbPowered();
+  if (_fake_batt_mv) { _batt_mv = _fake_batt_mv; _batt_pct = 0; _usb = false; }   // test console override
+}
+
+// ---- low battery protection ----
+// Below LOW_BATT_WARN_MV: one vibration + warning. Below LOW_BATT_OFF_MV on two readings in a row
+// (so a brief dip during a radio transmission doesn't count): save everything and power off.
+// Protects the cell from deep discharge and avoids losing messages when it would die anyway.
+#define LOW_BATT_WARN_MV 3500
+#define LOW_BATT_OFF_MV  3350
+
+void UITask::checkLowBattery(bool at_boot) {
+  if (_usb || _batt_mv < 2500) { _low_count = 0; _low_warned = false; return; }   // on USB, or no gauge reading
+  if (_batt_mv < LOW_BATT_OFF_MV) {
+    if (at_boot || ++_low_count >= 2) lowBatteryShutdown();
+    return;
+  }
+  _low_count = 0;
+  if (_batt_mv < LOW_BATT_WARN_MV && !_low_warned) {
+    _low_warned = true;
+    board.buzz(14);
+    toast("Battery low - charge soon");
+    _toast_until = millis() + 10000;   // keep this one up longer
+  }
+}
+
+void UITask::lowBatteryShutdown() {
+  _store.saveIfNeeded(true);
+  the_mesh.savePrefs();
+  uint32_t t = rtc_clock.getCurrentTime();
+  File f = SPIFFS.open(UI_TIME_FILE, "w", true);
+  if (f) { f.write((uint8_t*)&t, 4); f.close(); }
+  _disp->startFrame();
+  g().setTextColor(BLACK);
+  font(3); g().setCursor((W - textW("Battery empty")) / 2, 140); g().print("Battery empty");
+  font(1);
+  g().setCursor((W - textW("Plug in to charge, then")) / 2, 175); g().print("Plug in to charge, then");
+  g().setCursor((W - textW("press the side button.")) / 2, 195); g().print("press the side button.");
+  _disp->forceFullRefresh();
+  _disp->commit();
+  board.powerOff();
 }
 
 // ======================================================================
@@ -948,6 +989,12 @@ void UITask::serialCommand(char* line) {
   if (strcmp(line, "!pinwatch off") == 0) { s_pinwatch = false; Serial.println("OK"); return; }
   if (strcmp(line, "!keylog on") == 0) { keyboard.log_raw = touch.log_raw = true; Serial.printf("OK touch=%d\n", touch.isReady()); return; }
   if (strcmp(line, "!keylog off") == 0) { keyboard.log_raw = touch.log_raw = false; Serial.println("OK"); return; }
+  if (strncmp(line, "!fakebatt ", 10) == 0) {   // test console: pretend the battery is at <mv> (0 = real)
+    _fake_batt_mv = (uint16_t)atoi(line + 10);
+    _batt_next = millis();                      // re-read on the next loop
+    Serial.printf("OK fake battery %u mV\n", _fake_batt_mv);
+    return;
+  }
   if (strcmp(line, "!unlock") == 0) {           // test console: same as pressing the side button
     if (_scr == SCR_LOCK) { back(); applyLights(); _last_input = millis(); }
     Serial.println("OK");
@@ -1029,7 +1076,8 @@ void UITask::loop() {
     int old = _batt_pct;
     bool was_usb = _usb;
     readBattery();
-    _batt_next = now + 30000;
+    _batt_next = now + (_batt_mv && _batt_mv < LOW_BATT_WARN_MV + 100 ? 10000 : 30000);   // check more often when low
+    checkLowBattery(false);
     if (_usb && !was_usb && _has_slept) usbPluggedAfterSleep();
     if (old != _batt_pct) _dirty = true;
   }
@@ -1063,14 +1111,14 @@ void UITask::loop() {
 
   // ---- power saving: light sleep between radio/keyboard events ----
   // (no light sleep while the frontlight is on: its PWM clock stops in sleep -> flicker)
-  bool can_sleep = !_usb && !isBluetoothEnabled() && !_gps_pow && !_dirty && board.getFrontlight() == 0
+  bool can_sleep = !_usb && !_fake_batt_mv && !isBluetoothEnabled() && !_gps_pow && !_dirty && board.getFrontlight() == 0
                    && !keyboard.keyHeld() && !the_mesh.hasPendingWork() && _pend_kind == 0
                    && now - _last_input > 3000 && now - _boot_ms > 15000;
   if (can_sleep) {
     for (int i = _store.count() - 1, n = 0; i >= 0 && n < 20; i--, n++)
       if (_store.at(i)->status == MS_SENDING) { can_sleep = false; break; }
   }
-  if (can_sleep && board.isUsbPowered()) {   // just plugged in
+  if (can_sleep && !_fake_batt_mv && board.isUsbPowered()) {   // just plugged in
     _usb = true; can_sleep = false; _dirty = true;
     if (_has_slept) usbPluggedAfterSleep();
   }
@@ -1191,7 +1239,7 @@ void UITask::header(const char* title) {
   char un[8] = ""; if (unread && _scr != SCR_CONVS) sprintf(un, "*%d ", unread);
   char bt[6] = ""; if (isBluetoothEnabled()) strcpy(bt, hasConnection() ? "BT+ " : "BT ");
   char bat[10];
-  if (_batt_pct >= 0) sprintf(bat, "%d%%%s", _batt_pct, _usb ? "+" : "");   // '+' = on USB / charging
+  if (_batt_pct >= 0) sprintf(bat, "%s%d%%%s", (!_usb && _batt_mv && _batt_mv < LOW_BATT_WARN_MV) ? "LOW " : "", _batt_pct, _usb ? "+" : "");   // "+" = charging
   else strcpy(bat, _usb ? "USB" : "?");
   snprintf(right, sizeof(right), "%s%s%s %s", un, bt, tm, bat);
   int rw = textW(right);
