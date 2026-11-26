@@ -1,4 +1,4 @@
-# maxmesh — MeshCore with a full on-device UI for the LilyGo T-Deck MAX
+# maxmesh — LilyGo T-Deck MAX firmware (MeshCore with a full on-device UI)
 
 **maxmesh** turns the LilyGo **T-Deck MAX** (ESP32-S3, SX1262 LoRa, 3.1" e-paper, QWERTY keyboard)
 into a complete standalone [MeshCore](https://github.com/meshcore-dev/MeshCore) messenger, like the

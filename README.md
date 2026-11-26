@@ -1,4 +1,4 @@
-> **This fork is _maxmesh_**: MeshCore with a full on-device UI for the LilyGo T-Deck MAX.
+> **maxmesh — LilyGo T-Deck MAX firmware.** This fork is _maxmesh_: MeshCore with a full on-device keyboard + e-paper UI for the T-Deck MAX.
 > See **[maxmesh/README.md](maxmesh/README.md)** for features, install and build instructions.
 > Everything below is the original MeshCore README.
 
