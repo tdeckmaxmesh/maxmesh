@@ -42,6 +42,7 @@ static inline void bcMark(uint32_t stage) { bc_stage = stage; }
 #define WHITE GxEPD_WHITE
 #define UI_CFG_FILE "/mx_ui.cfg"
 #define UI_CFG_MAGIC 0x4D585533
+#define UI_TIME_FILE "/mx_time"
 
 // RepeaterStats layout as sent by simple_repeater / room server (REQ_TYPE_GET_STATUS)
 struct RemoteStats {
@@ -152,6 +153,16 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   loadCfg();
   _store.begin(SPIFFS);
   spell.begin(SPIFFS);
+
+  // A full reset (reset button, flat battery) loses the clock; MeshCore then guesses from
+  // the newest contact, which can be hours old. Use our periodically saved time if newer.
+  {
+    File f = SPIFFS.open(UI_TIME_FILE, "r");
+    uint32_t saved = 0;
+    if (f) { if (f.read((uint8_t*)&saved, 4) != 4) saved = 0; f.close(); }
+    if (saved > rtc_clock.getCurrentTime()) rtc_clock.setCurrentTime(saved);
+    _time_saved_at = millis();
+  }
 
   // keep the BLE PIN stable across reboots (upstream picks a new random one each boot)
   if (_prefs->ble_pin == 0 && the_mesh.getBLEPin() != 0) {
@@ -1035,6 +1046,12 @@ void UITask::loop() {
   }
 
   bcMark(BC_SAVE);
+  if (millis() - _time_saved_at > 5UL * 60 * 1000 && clockValid()) {   // remember the time every 5 min
+    _time_saved_at = millis();
+    uint32_t t = rtc_clock.getCurrentTime();
+    File f = SPIFFS.open(UI_TIME_FILE, "w", true);
+    if (f) { f.write((uint8_t*)&t, 4); f.close(); }
+  }
   _store.saveIfNeeded(_scr == SCR_LOCK);
 
   if (_dirty) {

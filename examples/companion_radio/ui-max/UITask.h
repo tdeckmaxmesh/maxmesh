@@ -120,6 +120,7 @@ class UITask : public AbstractUITask {
   uint32_t _boot_ms = 0;
   bool _in_busy = false;
   bool _has_slept = false;    // light-sleep breaks the USB link until a restart
+  uint32_t _time_saved_at = 0;
   void usbPluggedAfterSleep();
 
   // serial test console ("!status", "!keys ...", "!shot")
