@@ -35,7 +35,8 @@ struct UISettings {
   uint8_t full_every;     // full e-ink refresh after N partials
   uint8_t welcomed;
   uint8_t spell_off;      // 1 = no spell-check underlines
-  uint8_t reserved[15];
+  uint8_t gps_no_tsync;   // 1 = don't use GPS to fix the clock after a power loss (0 = auto sync on)
+  uint8_t reserved[14];
 };
 
 struct AdminState {
@@ -121,6 +122,18 @@ class UITask : public AbstractUITask {
   bool _in_busy = false;
   bool _has_slept = false;    // light-sleep breaks the USB link until a restart
   uint32_t _time_saved_at = 0;
+  // GPS auto time sync: after a start that lost the clock (power loss / flat battery / reset), the clock is
+  // "suspect" until GPS (or the app, or a manual set) fixes it. GPS is powered just for that, then off again.
+  bool _clock_suspect = false;
+  bool _tsync_active = false;      // GPS powered by us (user GPS setting is off)
+  uint32_t _tsync_next = 0;        // millis() of the next attempt
+  uint32_t _tsync_started = 0, _tsync_valid_since = 0;
+  uint32_t _tsync_ref_rtc = 0, _tsync_ref_ms = 0;   // to notice the clock being set by someone else
+  double _tsync_lat = 0, _tsync_lon = 0;
+  void timeSyncLoop();
+  void timeSyncStart();
+  void timeSyncStop(bool ok);
+  void timeSyncRef();
   void usbPluggedAfterSleep();
   void checkLowBattery(bool at_boot);
   void lowBatteryShutdown();

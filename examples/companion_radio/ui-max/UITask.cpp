@@ -161,7 +161,13 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
     uint32_t saved = 0;
     if (f) { if (f.read((uint8_t*)&saved, 4) != 4) saved = 0; f.close(); }
     if (saved > rtc_clock.getCurrentTime()) rtc_clock.setCurrentTime(saved);
-    _time_saved_at = millis();
+    _time_saved_at = millis() | 1;
+    // the ESP32 keeps its clock through deep sleep and software restarts/crashes, not through a power-on,
+    // brownout or reset-button start: then the time above is only "when we last saved it"
+    _clock_suspect = bc_reason == ESP_RST_POWERON || bc_reason == ESP_RST_BROWNOUT || bc_reason == ESP_RST_EXT ||
+                     bc_reason == ESP_RST_UNKNOWN;
+    _tsync_next = millis() + 8000;     // first attempt shortly after start-up
+    timeSyncRef();
   }
 
   // keep the BLE PIN stable across reboots (upstream picks a new random one each boot)
@@ -222,10 +228,79 @@ void UITask::applyLights() {
 }
 
 void UITask::gpsPowerSync() {
-  bool want = _prefs->gps_enabled;
+  bool want = _prefs->gps_enabled || _tsync_active;
   if (want != _gps_pow) {
     board.setGpsPower(want);
     _gps_pow = want;
+  }
+}
+
+// ---- GPS auto time sync ----
+#define TSYNC_TRY_MS    (5UL * 60 * 1000)    // give GPS this long to get a fix
+#define TSYNC_RETRY_MS  (30UL * 60 * 1000)   // then wait this long before trying again
+#define TSYNC_STEADY_MS 5000                 // fix must hold this long before we trust its time
+
+void UITask::timeSyncRef() { _tsync_ref_rtc = rtc_clock.getCurrentTime(); _tsync_ref_ms = millis(); }
+
+void UITask::timeSyncStart() {
+  _tsync_lat = _sensors->node_lat; _tsync_lon = _sensors->node_lon;   // a sync must not move "my position"
+  _tsync_active = true;
+  _tsync_started = millis(); _tsync_valid_since = 0;
+  gpsPowerSync();                        // power the GPS rail first
+  _sensors->setSettingValue("gps", "1"); // then start reading it
+  _dirty = true;
+}
+
+void UITask::timeSyncStop(bool ok) {
+  if (_tsync_active) {
+    _tsync_active = false;
+    if (!_prefs->gps_enabled) {
+      _sensors->setSettingValue("gps", "0");
+      _sensors->node_lat = _tsync_lat; _sensors->node_lon = _tsync_lon;
+    }
+    gpsPowerSync();
+  }
+  _tsync_next = millis() + (ok ? 0 : TSYNC_RETRY_MS);
+  _dirty = true;
+}
+
+void UITask::timeSyncLoop() {
+  uint32_t now = millis();
+  // clock set some other way (phone app, Settings, console, GPS on by the user)? -> trusted
+  int32_t drift = (int32_t)(rtc_clock.getCurrentTime() - (_tsync_ref_rtc + (now - _tsync_ref_ms) / 1000));
+  if (drift > 90 || drift < -90) {
+    if (_clock_suspect && clockValid()) { _clock_suspect = false; Serial.println("tsync: clock was set"); }
+    timeSyncRef();
+    _time_saved_at = 0;                  // save the corrected time soon
+    _dirty = true;
+  }
+  if (!_clock_suspect || _cfg.gps_no_tsync) { if (_tsync_active) timeSyncStop(true); return; }
+
+  LocationProvider* lp = ((EnvironmentSensorManager*)_sensors)->getLocationProvider();
+  if (!lp) return;
+  bool gps_running = _prefs->gps_enabled || _tsync_active;
+  if (!gps_running) {
+    if ((int32_t)(now - _tsync_next) >= 0) { Serial.println("tsync: GPS on for time"); timeSyncStart(); }
+    return;
+  }
+  if (lp->isValid()) {
+    if (!_tsync_valid_since) _tsync_valid_since = now ? now : 1;
+    long t = lp->getTimestamp();
+    if (now - _tsync_valid_since >= TSYNC_STEADY_MS && t > 1767225600L) {
+      rtc_clock.setCurrentTime((uint32_t)t);
+      timeSyncRef();
+      _clock_suspect = false;
+      _time_saved_at = 0;
+      Serial.printf("tsync: clock set from GPS %ld\n", t);
+      timeSyncStop(true);
+      toast("Clock set from GPS");
+    }
+  } else {
+    _tsync_valid_since = 0;
+    if (_tsync_active && now - _tsync_started > TSYNC_TRY_MS) {
+      Serial.println("tsync: no fix, retry later");
+      timeSyncStop(false);
+    }
   }
 }
 
@@ -1000,6 +1075,11 @@ void UITask::serialCommand(char* line) {
     Serial.println("OK");
     return;
   }
+  if (strcmp(line, "!clocklost") == 0) {        // test console: behave as after a power loss
+    _clock_suspect = true; _tsync_next = millis(); timeSyncRef(); _dirty = true;
+    Serial.println("OK clock marked suspect");
+    return;
+  }
   if (strncmp(line, "!settime ", 9) == 0) {      // !settime <unix epoch, UTC>  (e.g. from a PC)
     uint32_t t = strtoul(line + 9, nullptr, 10);
     if (t > 1700000000UL) { rtc_clock.setCurrentTime(t); _dirty = true; Serial.printf("OK clock=%u\n", (unsigned)rtc_clock.getCurrentTime()); }
@@ -1084,6 +1164,7 @@ void UITask::loop() {
   uint32_t minute = rtc_clock.getCurrentTime() / 60;
   if (minute != _last_minute) { _last_minute = minute; _dirty = true; }
   if (_toast[0] && (int32_t)(now - _toast_until) > 0) { _toast[0] = 0; _dirty = true; }
+  timeSyncLoop();
   gpsPowerSync();
 
   // auto-lock
@@ -1094,8 +1175,8 @@ void UITask::loop() {
   }
 
   bcMark(BC_SAVE);
-  if (millis() - _time_saved_at > 5UL * 60 * 1000 && clockValid()) {   // remember the time every 5 min
-    _time_saved_at = millis();
+  if ((_time_saved_at == 0 || millis() - _time_saved_at > 5UL * 60 * 1000) && clockValid()) {   // remember the time every 5 min
+    _time_saved_at = millis() | 1;
     uint32_t t = rtc_clock.getCurrentTime();
     File f = SPIFFS.open(UI_TIME_FILE, "w", true);
     if (f) { f.write((uint8_t*)&t, 4); f.close(); }
@@ -1233,7 +1314,7 @@ void UITask::header(const char* title) {
   // right side: time, BT, battery
   char right[40] = "";
   char tm[16];
-  if (clockValid()) { uint32_t t = localNow(); sprintf(tm, "%02u:%02u", (unsigned)((t / 3600) % 24), (unsigned)((t / 60) % 60)); }
+  if (clockValid()) { uint32_t t = localNow(); sprintf(tm, "%02u:%02u%s", (unsigned)((t / 3600) % 24), (unsigned)((t / 60) % 60), _clock_suspect ? "?" : ""); }
   else strcpy(tm, "--:--");
   int unread = _store.totalUnread();
   char un[8] = ""; if (unread && _scr != SCR_CONVS) sprintf(un, "*%d ", unread);
@@ -2095,10 +2176,17 @@ void UITask::drawGps() {
   putText(g(), 6, y, l); y += 13;
   snprintf(l, sizeof(l), "Share position in adverts: %s", _prefs->advert_loc_policy ? "YES" : "no");
   putText(g(), 6, y, l); y += 13;
-  snprintf(l, sizeof(l), "Clock: %s", clockValid() ? "set" : "NOT SET (GPS or app sets it)");
+  const char* cs = !clockValid() ? "NOT SET (GPS or app sets it)"
+                 : !_clock_suspect ? "OK"
+                 : (_tsync_active || _prefs->gps_enabled) ? "may be off - syncing from GPS..."
+                 : _cfg.gps_no_tsync ? "may be off (power was lost)" : "may be off - GPS retry later";
+  snprintf(l, sizeof(l), "Clock: %s", cs);
+  putText(g(), 6, y, l); y += 13;
+  snprintf(l, sizeof(l), "GPS auto time sync: %s", _cfg.gps_no_tsync ? "OFF" : "ON (after power loss)");
   putText(g(), 6, y, l); y += 20;
   font(1);
   putText(g(), 6, y, "G   turn GPS on/off"); y += 20;
+  putText(g(), 6, y, "T   GPS auto time sync on/off"); y += 20;
   putText(g(), 6, y, "L   share position on/off"); y += 20;
   putText(g(), 6, y, "Z   send advert now"); y += 20;
   putText(g(), 6, y, "X   clear my position");
@@ -2109,10 +2197,19 @@ void UITask::keyGps(int k) {
   if (isBack(k)) { back(); return; }
   if (k == 'g') {
     _prefs->gps_enabled = !_prefs->gps_enabled;
+    if (_tsync_active) {   // the user takes over the GPS (on: keeps running for them; off: put my position back)
+      _tsync_active = false; _tsync_next = millis() + TSYNC_RETRY_MS;
+      if (!_prefs->gps_enabled) { _sensors->node_lat = _tsync_lat; _sensors->node_lon = _tsync_lon; }
+    }
     the_mesh.applyGpsPrefs();
     the_mesh.savePrefs();
     gpsPowerSync();
     toast(_prefs->gps_enabled ? "GPS on (fix may take a few minutes)" : "GPS off");
+  } else if (k == 't') {
+    _cfg.gps_no_tsync = !_cfg.gps_no_tsync;
+    saveCfg();
+    if (!_cfg.gps_no_tsync) _tsync_next = millis();   // try now if the clock is in doubt
+    toast(_cfg.gps_no_tsync ? "GPS auto time sync off" : "GPS auto time sync on");
   } else if (k == 'l') {
     _prefs->advert_loc_policy = _prefs->advert_loc_policy ? ADVERT_LOC_NONE : ADVERT_LOC_SHARE;
     the_mesh.savePrefs();
@@ -2291,7 +2388,7 @@ void UITask::drawLock() {
   char t[16];
   if (clockValid()) {
     font(5);
-    uint32_t n = localNow(); sprintf(t, "%u:%02u", (unsigned)((n / 3600) % 24), (unsigned)((n / 60) % 60));
+    uint32_t n = localNow(); sprintf(t, "%u:%02u%s", (unsigned)((n / 3600) % 24), (unsigned)((n / 60) % 60), _clock_suspect ? "?" : "");
     putText(g(), (W - textW(t)) / 2, 50, t);
   } else {
     font(2);
