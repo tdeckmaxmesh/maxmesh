@@ -350,18 +350,18 @@ void DataStore::saveContacts(DataStoreHost* host, bool (*filter)(const ContactIn
       bool success = true;
       if (batch_len + CONTACT_REC_LEN > sizeof(batch)) { success = file.write(batch, batch_len) == batch_len; batch_len = 0; }
 #else
-      bool success = (file.write(c.id.pub_key, 32) == 32);
-      success = success && (file.write((uint8_t *)&c.name, 32) == 32);
-      success = success && (file.write(&c.type, 1) == 1);
-      success = success && (file.write(&c.flags, 1) == 1);
-      success = success && (file.write(&unused, 1) == 1);
-      success = success && (file.write((uint8_t *)&c.sync_since, 4) == 4);
-      success = success && (file.write((uint8_t *)&c.out_path_len, 1) == 1);
-      success = success && (file.write((uint8_t *)&c.last_advert_timestamp, 4) == 4);
-      success = success && (file.write(c.out_path, 64) == 64);
-      success = success && (file.write((uint8_t *)&c.lastmod, 4) == 4);
-      success = success && (file.write((uint8_t *)&c.gps_lat, 4) == 4);
-      success = success && (file.write((uint8_t *)&c.gps_lon, 4) == 4);
+      bool success = (file.write(c.id.pub_key, 32) == 32);
+      success = success && (file.write((uint8_t *)&c.name, 32) == 32);
+      success = success && (file.write(&c.type, 1) == 1);
+      success = success && (file.write(&c.flags, 1) == 1);
+      success = success && (file.write(&unused, 1) == 1);
+      success = success && (file.write((uint8_t *)&c.sync_since, 4) == 4);
+      success = success && (file.write((uint8_t *)&c.out_path_len, 1) == 1);
+      success = success && (file.write((uint8_t *)&c.last_advert_timestamp, 4) == 4);
+      success = success && (file.write(c.out_path, 64) == 64);
+      success = success && (file.write((uint8_t *)&c.lastmod, 4) == 4);
+      success = success && (file.write((uint8_t *)&c.gps_lat, 4) == 4);
+      success = success && (file.write((uint8_t *)&c.gps_lon, 4) == 4);
 #endif
 
       if (!success) {  // write failed
