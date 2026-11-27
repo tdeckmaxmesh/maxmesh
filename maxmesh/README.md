@@ -37,9 +37,12 @@ If the device doesn't show up on USB: hold the side rocker **up** (BOOT), tap it
   counters, airtime), advert, clock sync, neighbours, version, radio, custom CLI commands, reboot
 - **Spell check** in the message box (dashed underline, personal dictionary)
 - **Heard nearby**, zero-hop and flood adverts, **GPS** with location sharing
+- **GPS auto time sync**: after a power loss / flat battery the time shows a `?` and the GPS is switched on
+  just long enough to set the clock, then off again (GPS page, **T** to turn off)
 - **Settings**: name, radio presets or custom freq/BW/SF/CR, TX power, antenna, Bluetooth + fixed PIN,
   vibration, frontlight, keyboard light, auto-lock, timezone, clock, e-ink refresh
-- **Lock screen** with unread summary; message history saved across reboots (crash-safe writes)
+- **Lock screen** with unread summary; messages, contacts and channels saved with crash-safe writes
+  (a power cut mid-save keeps the previous copy)
 - **Battery**: 80 MHz CPU, unused hardware powered off, light sleep between events when Bluetooth is off;
   low-battery warning at 3.5 V and automatic safe power-off below 3.35 V (messages saved)
 
