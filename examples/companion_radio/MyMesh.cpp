@@ -2455,6 +2455,10 @@ bool MyMesh::hasPendingWork() const {
 }
 
 // ---- helpers for on-device (standalone) UIs ----
+void MyMesh::uiFlushContacts() {
+  if (dirty_contacts_expiry) { saveContacts(); dirty_contacts_expiry = 0; }
+}
+
 void MyMesh::uiSaveContactsSoon() {
   dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
 }

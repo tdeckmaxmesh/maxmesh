@@ -126,6 +126,7 @@ class UITask : public AbstractUITask {
   // "suspect" until GPS (or the app, or a manual set) fixes it. GPS is powered just for that, then off again.
   bool _clock_suspect = false;
   bool _tsync_active = false;      // GPS powered by us (user GPS setting is off)
+  bool _tsync_failed = false;      // last attempt got no fix (waiting to retry)
   uint32_t _tsync_next = 0;        // millis() of the next attempt
   uint32_t _tsync_started = 0, _tsync_valid_since = 0;
   uint32_t _tsync_ref_rtc = 0, _tsync_ref_ms = 0;   // to notice the clock being set by someone else

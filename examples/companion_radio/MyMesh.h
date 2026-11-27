@@ -221,6 +221,7 @@ public:
   // ---- helpers for on-device (standalone) UIs ----
   void uiSaveChannels() { saveChannels(); }
   void uiSaveContactsSoon();
+  void uiFlushContacts();   // write pending contact changes now (before power-off)
   void uiDeleteContactBlob(const uint8_t* pub_key) { _store->deleteBlobByKey(pub_key, PUB_KEY_SIZE); }
   void uiStartConnection(const ContactInfo& contact, uint16_t keep_alive_secs) { startConnection(contact, keep_alive_secs); }
   void uiStopConnection(const uint8_t* pub_key) { stopConnection(pub_key); }

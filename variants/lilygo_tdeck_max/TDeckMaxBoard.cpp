@@ -88,11 +88,26 @@ void TDeckMaxBoard::begin() {
     rtc_gpio_hold_dis((gpio_num_t)P_LORA_NSS);
   }
 
+  // A reset in the middle of an I2C transfer can leave a slave holding SDA low ("stuck bus"); then
+  // the first transfers fail and the XL9555 power rails (GPS, keyboard light, ...) never get set up.
+  // Clock the bus free first (standard 9-pulse recovery + STOP).
+  pinMode(PIN_BOARD_SDA, INPUT_PULLUP);
+  pinMode(PIN_BOARD_SCL, INPUT_PULLUP);
+  delayMicroseconds(10);
+  if (digitalRead(PIN_BOARD_SDA) == LOW) {
+    for (int i = 0; i < 9 && digitalRead(PIN_BOARD_SDA) == LOW; i++) {
+      pinMode(PIN_BOARD_SCL, OUTPUT); digitalWrite(PIN_BOARD_SCL, LOW); delayMicroseconds(5);
+      pinMode(PIN_BOARD_SCL, INPUT_PULLUP); delayMicroseconds(5);
+    }
+    pinMode(PIN_BOARD_SDA, OUTPUT); digitalWrite(PIN_BOARD_SDA, LOW); delayMicroseconds(5);   // STOP:
+    pinMode(PIN_BOARD_SDA, INPUT_PULLUP); delayMicroseconds(5);                              // SDA up while SCL high
+  }
+
   ESP32Board::begin();               // Wire.begin(PIN_BOARD_SDA, PIN_BOARD_SCL)
   Wire.setClock(400000);
 
   // ---- XL9555: every rail starts in a known state ----
-  _xl_ok = i2cPresent(MAX_ADDR_XL9555);
+  for (int i = 0; i < 5 && !(_xl_ok = i2cPresent(MAX_ADDR_XL9555)); i++) delay(10);   // retry a few times
   if (_xl_ok) {
     xlWrite(XL_REG_CFG0, 0x00);      // all outputs
     xlWrite(XL_REG_CFG1, 0x00);

@@ -42,6 +42,28 @@ static File openWrite(FILESYSTEM* fs, const char* filename) {
 #endif
 }
 
+#if defined(ESP32)
+// maxmesh: crash-safe saves on ESP32. The contacts/channels files are rewritten often; a power cut or brownout
+// half-way through used to leave a truncated file (= lost contacts). Write a temp copy, then swap it in.
+#define SAFE_TMP_SUFFIX ".tmp"
+static File openWriteSafe(FILESYSTEM* fs, const char* filename) {
+  char tmp[40]; snprintf(tmp, sizeof(tmp), "%s" SAFE_TMP_SUFFIX, filename);
+  return fs->open(tmp, "w", true);
+}
+static void commitSafe(FILESYSTEM* fs, const char* filename, bool ok) {
+  char tmp[40]; snprintf(tmp, sizeof(tmp), "%s" SAFE_TMP_SUFFIX, filename);
+  if (!ok) { fs->remove(tmp); return; }          // keep the old, complete file
+  fs->remove(filename);
+  fs->rename(tmp, filename);
+}
+static void recoverSafe(FILESYSTEM* fs, const char* filename) {
+  char tmp[40]; snprintf(tmp, sizeof(tmp), "%s" SAFE_TMP_SUFFIX, filename);
+  if (!fs->exists(tmp)) return;
+  if (fs->exists(filename)) fs->remove(tmp);     // cut short while writing: the old file is the good one
+  else fs->rename(tmp, filename);                // cut between "remove" and "rename": the temp copy is complete
+}
+#endif
+
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
   static uint32_t _ContactsChannelsTotalBlocks = 0;
 #endif
@@ -257,6 +279,9 @@ bool DataStore::savePrefs(NodePrefs& _prefs) {
 }
 
 void DataStore::loadContacts(DataStoreHost* host) {
+#if defined(ESP32)
+  recoverSafe(_getContactsChannelsFS(), "/contacts3");
+#endif
 File file = openRead(_getContactsChannelsFS(), "/contacts3");
     if (file) {
       bool full = false;
@@ -288,7 +313,15 @@ File file = openRead(_getContactsChannelsFS(), "/contacts3");
 }
 
 void DataStore::saveContacts(DataStoreHost* host, bool (*filter)(const ContactInfo& c)) {
+#if defined(ESP32)
+  File file = openWriteSafe(_getContactsChannelsFS(), "/contacts3");
+  bool all_ok = true;
+  #define CONTACT_REC_LEN 152
+  static uint8_t batch[CONTACT_REC_LEN * 16];
+  size_t batch_len = 0;
+#else
   File file = openWrite(_getContactsChannelsFS(), "/contacts3");
+#endif
   if (file) {
     uint32_t idx = 0;
     ContactInfo c;
@@ -299,28 +332,61 @@ void DataStore::saveContacts(DataStoreHost* host, bool (*filter)(const ContactIn
         idx++;  // advance to next contact
         continue;
       }
-      bool success = (file.write(c.id.pub_key, 32) == 32);
-      success = success && (file.write((uint8_t *)&c.name, 32) == 32);
-      success = success && (file.write(&c.type, 1) == 1);
-      success = success && (file.write(&c.flags, 1) == 1);
-      success = success && (file.write(&unused, 1) == 1);
-      success = success && (file.write((uint8_t *)&c.sync_since, 4) == 4);
-      success = success && (file.write((uint8_t *)&c.out_path_len, 1) == 1);
-      success = success && (file.write((uint8_t *)&c.last_advert_timestamp, 4) == 4);
-      success = success && (file.write(c.out_path, 64) == 64);
-      success = success && (file.write((uint8_t *)&c.lastmod, 4) == 4);
-      success = success && (file.write((uint8_t *)&c.gps_lat, 4) == 4);
-      success = success && (file.write((uint8_t *)&c.gps_lon, 4) == 4);
+#if defined(ESP32)
+      // maxmesh: same 152-byte record, but built in RAM and written in batches of 16 records. Thousands of
+      // tiny writes made a ~400-contact save take ~17 s on SPIFFS (UI frozen, long power-loss window).
+      uint8_t* r = batch + batch_len;
+      memcpy(r, c.id.pub_key, 32); r += 32;
+      memcpy(r, &c.name, 32); r += 32;
+      *r++ = c.type; *r++ = c.flags; *r++ = unused;
+      memcpy(r, &c.sync_since, 4); r += 4;
+      *r++ = (uint8_t)c.out_path_len;
+      memcpy(r, &c.last_advert_timestamp, 4); r += 4;
+      memcpy(r, c.out_path, 64); r += 64;
+      memcpy(r, &c.lastmod, 4); r += 4;
+      memcpy(r, &c.gps_lat, 4); r += 4;
+      memcpy(r, &c.gps_lon, 4); r += 4;
+      batch_len += CONTACT_REC_LEN;
+      bool success = true;
+      if (batch_len + CONTACT_REC_LEN > sizeof(batch)) { success = file.write(batch, batch_len) == batch_len; batch_len = 0; }
+#else
+      bool success = (file.write(c.id.pub_key, 32) == 32);
+      success = success && (file.write((uint8_t *)&c.name, 32) == 32);
+      success = success && (file.write(&c.type, 1) == 1);
+      success = success && (file.write(&c.flags, 1) == 1);
+      success = success && (file.write(&unused, 1) == 1);
+      success = success && (file.write((uint8_t *)&c.sync_since, 4) == 4);
+      success = success && (file.write((uint8_t *)&c.out_path_len, 1) == 1);
+      success = success && (file.write((uint8_t *)&c.last_advert_timestamp, 4) == 4);
+      success = success && (file.write(c.out_path, 64) == 64);
+      success = success && (file.write((uint8_t *)&c.lastmod, 4) == 4);
+      success = success && (file.write((uint8_t *)&c.gps_lat, 4) == 4);
+      success = success && (file.write((uint8_t *)&c.gps_lon, 4) == 4);
+#endif
 
-      if (!success) break; // write failed
+      if (!success) {  // write failed
+#if defined(ESP32)
+        all_ok = false;
+#endif
+        break;
+      }
 
       idx++;  // advance to next contact
     }
+#if defined(ESP32)
+    if (all_ok && batch_len) all_ok = file.write(batch, batch_len) == batch_len;
+#endif
     file.close();
+#if defined(ESP32)
+    commitSafe(_getContactsChannelsFS(), "/contacts3", all_ok);
+#endif
   }
 }
 
 void DataStore::loadChannels(DataStoreHost* host) {
+#if defined(ESP32)
+    recoverSafe(_getContactsChannelsFS(), "/channels2");
+#endif
     File file = openRead(_getContactsChannelsFS(), "/channels2");
     if (file) {
       bool full = false;
@@ -346,7 +412,12 @@ void DataStore::loadChannels(DataStoreHost* host) {
 }
 
 void DataStore::saveChannels(DataStoreHost* host) {
+#if defined(ESP32)
+  File file = openWriteSafe(_getContactsChannelsFS(), "/channels2");
+  bool all_ok = true;
+#else
   File file = openWrite(_getContactsChannelsFS(), "/channels2");
+#endif
   if (file) {
     uint8_t channel_idx = 0;
     ChannelDetails ch;
@@ -358,10 +429,18 @@ void DataStore::saveChannels(DataStoreHost* host) {
       success = success && (file.write((uint8_t *)ch.name, 32) == 32);
       success = success && (file.write((uint8_t *)ch.channel.secret, 32) == 32);
 
-      if (!success) break; // write failed
+      if (!success) {  // write failed
+#if defined(ESP32)
+        all_ok = false;
+#endif
+        break;
+      }
       channel_idx++;
     }
     file.close();
+#if defined(ESP32)
+    commitSafe(_getContactsChannelsFS(), "/channels2", all_ok);
+#endif
   }
 }
 

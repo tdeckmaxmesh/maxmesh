@@ -29,6 +29,9 @@ SET_LOOP_TASK_STACK_SIZE(16 * 1024);
 #include <esp_system.h>
 #define BC_MAGIC 0xB4EADC0D
 RTC_NOINIT_ATTR static uint32_t bc_magic, bc_key, bc_scr, bc_stage, bc_modal, bc_crashes;
+// "clock in doubt" must survive software restarts (USB-plug restart, crash) until the clock is really fixed
+#define TS_MAGIC 0x71C0C10C
+RTC_NOINIT_ATTR static uint32_t ts_magic, ts_suspect;
 static uint32_t bc_prev_key, bc_prev_scr, bc_prev_stage, bc_prev_modal;
 static int bc_reason = -1;
 enum { BC_IDLE = 0, BC_KEY = 1, BC_RENDER = 2, BC_MESH_IN_REFRESH = 3, BC_SAVE = 4, BC_SLEEP = 5 };
@@ -165,7 +168,8 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
     // the ESP32 keeps its clock through deep sleep and software restarts/crashes, not through a power-on,
     // brownout or reset-button start: then the time above is only "when we last saved it"
     _clock_suspect = bc_reason == ESP_RST_POWERON || bc_reason == ESP_RST_BROWNOUT || bc_reason == ESP_RST_EXT ||
-                     bc_reason == ESP_RST_UNKNOWN;
+                     bc_reason == ESP_RST_UNKNOWN || (ts_magic == TS_MAGIC && ts_suspect == 1);
+    ts_magic = TS_MAGIC; ts_suspect = _clock_suspect ? 1 : 0;
     _tsync_next = millis() + 8000;     // first attempt shortly after start-up
     timeSyncRef();
   }
@@ -236,7 +240,7 @@ void UITask::gpsPowerSync() {
 }
 
 // ---- GPS auto time sync ----
-#define TSYNC_TRY_MS    (5UL * 60 * 1000)    // give GPS this long to get a fix
+#define TSYNC_TRY_MS    (10UL * 60 * 1000)   // give GPS this long to get a fix (cold start by a window can be slow)
 #define TSYNC_RETRY_MS  (30UL * 60 * 1000)   // then wait this long before trying again
 #define TSYNC_STEADY_MS 5000                 // fix must hold this long before we trust its time
 
@@ -261,11 +265,13 @@ void UITask::timeSyncStop(bool ok) {
     gpsPowerSync();
   }
   _tsync_next = millis() + (ok ? 0 : TSYNC_RETRY_MS);
+  _tsync_failed = !ok;
   _dirty = true;
 }
 
 void UITask::timeSyncLoop() {
   uint32_t now = millis();
+  ts_magic = TS_MAGIC; ts_suspect = _clock_suspect ? 1 : 0;   // remembered across software restarts
   // clock set some other way (phone app, Settings, console, GPS on by the user)? -> trusted
   int32_t drift = (int32_t)(rtc_clock.getCurrentTime() - (_tsync_ref_rtc + (now - _tsync_ref_ms) / 1000));
   if (drift > 90 || drift < -90) {
@@ -336,6 +342,7 @@ void UITask::checkLowBattery(bool at_boot) {
 
 void UITask::lowBatteryShutdown() {
   _store.saveIfNeeded(true);
+  the_mesh.uiFlushContacts();
   the_mesh.savePrefs();
   uint32_t t = rtc_clock.getCurrentTime();
   File f = SPIFFS.open(UI_TIME_FILE, "w", true);
@@ -872,6 +879,7 @@ void UITask::handleButton() {
     // power off
     _store.saveIfNeeded(true);
     the_mesh.savePrefs();
+    the_mesh.uiFlushContacts();
     _disp->startFrame();
     g().setTextColor(BLACK);
     font(3); g().setCursor(20, 140); g().print("Powered off");
@@ -959,6 +967,8 @@ void UITask::printStatus() {
   Serial.printf(" clock=%u valid=%d heap=%u psram=%u spiffs=%u/%u refreshes=%u\n", (unsigned)rtc_clock.getCurrentTime(), clockValid(),
                 (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getFreePsram(), (unsigned)SPIFFS.usedBytes(), (unsigned)SPIFFS.totalBytes(),
                 (unsigned)_disp->refreshCount());
+  Serial.printf(" tsync: suspect=%d active=%d failed=%d off=%d next_in=%ds\n", _clock_suspect, _tsync_active, _tsync_failed, _cfg.gps_no_tsync,
+                (int)((int32_t)(_tsync_next - millis()) / 1000));
   Serial.printf(" stack: loop task min free %u of %u bytes\n",
                 (unsigned)uxTaskGetStackHighWaterMark(NULL), (unsigned)getArduinoLoopTaskStackSize());
   LocationProvider* lp = ((EnvironmentSensorManager*)_sensors)->getLocationProvider();
@@ -1073,6 +1083,35 @@ void UITask::serialCommand(char* line) {
   if (strcmp(line, "!unlock") == 0) {           // test console: same as pressing the side button
     if (_scr == SCR_LOCK) { back(); applyLights(); _last_input = millis(); }
     Serial.println("OK");
+    return;
+  }
+  if (strcmp(line, "!fstest") == 0) {           // test console: time the flash file system steps
+    static uint8_t buf[2432]; memset(buf, 0x5A, sizeof(buf));
+    uint32_t t0 = millis();
+    File f = SPIFFS.open("/fstest.tmp", "w", true);
+    uint32_t t1 = millis();
+    for (int i = 0; i < 24; i++) f.write(buf, sizeof(buf));
+    uint32_t t2 = millis();
+    f.close();
+    uint32_t t3 = millis();
+    SPIFFS.rename("/fstest.tmp", "/fstest.bin");
+    uint32_t t4 = millis();
+    SPIFFS.remove("/fstest.bin");
+    uint32_t t5 = millis();
+    uint32_t t6 = millis(); uint32_t n = 0;
+    { ContactInfo c; while (the_mesh.getContactByIdx(n, c)) n++; }
+    uint32_t t7 = millis();
+    Serial.printf("OK open %u, write 58KB %u, close %u, rename %u, remove %u ms; walk %u contacts %u ms\n",
+                  (unsigned)(t1 - t0), (unsigned)(t2 - t1), (unsigned)(t3 - t2), (unsigned)(t4 - t3), (unsigned)(t5 - t4),
+                  (unsigned)n, (unsigned)(t7 - t6));
+    return;
+  }
+  if (strcmp(line, "!savecontacts") == 0) {     // test console: force a contacts save, show the files
+    uint32_t t0 = millis();
+    the_mesh.uiSaveContactsSoon(); the_mesh.uiFlushContacts();
+    File f = SPIFFS.open("/contacts3", "r"); size_t sz = f ? f.size() : 0; if (f) f.close();
+    Serial.printf("OK saved in %ums: /contacts3=%u bytes (%u contacts) tmp_left=%d\n", (unsigned)(millis() - t0), (unsigned)sz,
+                  (unsigned)(sz / 152), (int)SPIFFS.exists("/contacts3.tmp"));
     return;
   }
   if (strcmp(line, "!clocklost") == 0) {        // test console: behave as after a power loss
@@ -2168,6 +2207,9 @@ void UITask::drawGps() {
       snprintf(l, sizeof(l), "Altitude %.0f m", lp->getAltitude() / 1000.0);
       putText(g(), 6, y, l); y += 13;
     }
+  } else if (_tsync_active && lp) {
+    snprintf(l, sizeof(l), "On for clock sync only - satellites: %ld", lp->satellitesCount());
+    putText(g(), 6, y, l); y += 13;
   } else {
     putText(g(), 6, y, "GPS is powered off to save battery."); y += 13;
   }
@@ -2178,11 +2220,12 @@ void UITask::drawGps() {
   putText(g(), 6, y, l); y += 13;
   const char* cs = !clockValid() ? "NOT SET (GPS or app sets it)"
                  : !_clock_suspect ? "OK"
-                 : (_tsync_active || _prefs->gps_enabled) ? "may be off - syncing from GPS..."
-                 : _cfg.gps_no_tsync ? "may be off (power was lost)" : "may be off - GPS retry later";
+                 : (_tsync_active || _prefs->gps_enabled) ? "may be off - syncing from GPS"
+                 : _cfg.gps_no_tsync ? "may be off (power was lost)"
+                 : _tsync_failed ? "may be off - no GPS fix, retry later" : "may be off - GPS starting";
   snprintf(l, sizeof(l), "Clock: %s", cs);
   putText(g(), 6, y, l); y += 13;
-  snprintf(l, sizeof(l), "GPS auto time sync: %s", _cfg.gps_no_tsync ? "OFF" : "ON (after power loss)");
+  snprintf(l, sizeof(l), "GPS auto time sync: %s", _cfg.gps_no_tsync ? "OFF" : "ON");
   putText(g(), 6, y, l); y += 20;
   font(1);
   putText(g(), 6, y, "G   turn GPS on/off"); y += 20;
@@ -2638,8 +2681,8 @@ void UITask::modalDone(bool ok) {
       toast("Message history cleared");
       break;
     }
-    case P_REBOOT: _store.saveIfNeeded(true); the_mesh.savePrefs(); delay(100); ESP.restart(); break;
-    case P_POWER_OFF: _btn_long_done = false; _store.saveIfNeeded(true); the_mesh.savePrefs();
+    case P_REBOOT: _store.saveIfNeeded(true); the_mesh.savePrefs(); the_mesh.uiFlushContacts(); delay(100); ESP.restart(); break;
+    case P_POWER_OFF: _btn_long_done = false; _store.saveIfNeeded(true); the_mesh.savePrefs(); the_mesh.uiFlushContacts();
       _disp->startFrame(); font(3); g().setCursor(20, 150); g().print("Powered off");
       _disp->forceFullRefresh(); _disp->commit(); board.powerOff(); break;
     default: break;
