@@ -114,7 +114,9 @@ void MsgStore::saveIfNeeded(bool force) {
   for (int i = 0; i < _count; i++) wrote += f.write((uint8_t*)at(i), sizeof(StoredMsg));
   f.close();
   if (wrote != want) { _fs->remove(MSG_TMP); return; }   // storage full etc: keep the old file
-  _fs->remove(MSG_FILE);
-  _fs->rename(MSG_TMP, MSG_FILE);
+  if (!_fs->rename(MSG_TMP, MSG_FILE)) {   // LittleFS replaces atomically; SPIFFS needs the old one gone
+    _fs->remove(MSG_FILE);
+    _fs->rename(MSG_TMP, MSG_FILE);
+  }
   _dirty = false;
 }

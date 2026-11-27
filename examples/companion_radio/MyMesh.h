@@ -18,6 +18,8 @@
 #include <InternalFileSystem.h>
 #elif defined(RP2040_PLATFORM)
 #include <LittleFS.h>
+#elif defined(ESP32) && defined(ESP32_USE_LITTLEFS)
+#include <LittleFS.h>
 #elif defined(ESP32)
 #include <SPIFFS.h>
 #endif

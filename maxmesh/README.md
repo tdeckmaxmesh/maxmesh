@@ -43,6 +43,9 @@ If the device doesn't show up on USB: hold the side rocker **up** (BOOT), tap it
   vibration, frontlight, keyboard light, auto-lock, timezone, clock, e-ink refresh
 - **Lock screen** with unread summary; messages, contacts and channels saved with crash-safe writes
   (a power cut mid-save keeps the previous copy)
+- **Fast storage (LittleFS)**: saving ~400 contacts takes ~1.5 s instead of ~11 s, so keys no longer
+  stall while the mesh is busy. Updating from v1.2 or older moves your data over automatically once
+  (about 30 s, "Upgrading storage..."), with a safety copy so a reset part-way can't lose it
 - **Battery**: 80 MHz CPU, unused hardware powered off, light sleep between events when Bluetooth is off;
   low-battery warning at 3.5 V and automatic safe power-off below 3.35 V (messages saved)
 

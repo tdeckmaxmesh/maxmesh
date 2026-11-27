@@ -8,7 +8,15 @@
 //            Alt+L = lock, Alt+B = frontlight, Alt+H = home
 
 #include "UITask.h"
+#include "../DataStore.h"
+#ifdef ESP32_USE_LITTLEFS
+#include <LittleFS.h>
+#include "MxStorage.h"
+#define MXFS LittleFS
+#else
 #include <SPIFFS.h>
+#define MXFS SPIFFS
+#endif
 #include <stdarg.h>
 #include <time.h>
 // base64.hpp is header-only (already compiled into BaseChatMesh.cpp), so just declare what we use
@@ -154,13 +162,13 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   memset(&_adm, 0, sizeof(_adm));
 
   loadCfg();
-  _store.begin(SPIFFS);
-  spell.begin(SPIFFS);
+  _store.begin(MXFS);
+  spell.begin(MXFS);
 
   // A full reset (reset button, flat battery) loses the clock; MeshCore then guesses from
   // the newest contact, which can be hours old. Use our periodically saved time if newer.
   {
-    File f = SPIFFS.open(UI_TIME_FILE, "r");
+    File f = MXFS.open(UI_TIME_FILE, "r");
     uint32_t saved = 0;
     if (f) { if (f.read((uint8_t*)&saved, 4) != 4) saved = 0; f.close(); }
     if (saved > rtc_clock.getCurrentTime()) rtc_clock.setCurrentTime(saved);
@@ -203,7 +211,7 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 
 void UITask::loadCfg() {
   memset(&_cfg, 0, sizeof(_cfg));
-  File f = SPIFFS.open(UI_CFG_FILE, "r");
+  File f = MXFS.open(UI_CFG_FILE, "r");
   bool ok = false;
   if (f) { ok = f.read((uint8_t*)&_cfg, sizeof(_cfg)) == sizeof(_cfg) && _cfg.magic == UI_CFG_MAGIC; f.close(); }
   if (!ok) {
@@ -221,7 +229,7 @@ void UITask::loadCfg() {
 }
 
 void UITask::saveCfg() {
-  File f = SPIFFS.open(UI_CFG_FILE, "w", true);
+  File f = MXFS.open(UI_CFG_FILE, "w", true);
   if (f) { f.write((uint8_t*)&_cfg, sizeof(_cfg)); f.close(); }
 }
 
@@ -345,7 +353,7 @@ void UITask::lowBatteryShutdown() {
   the_mesh.uiFlushContacts();
   the_mesh.savePrefs();
   uint32_t t = rtc_clock.getCurrentTime();
-  File f = SPIFFS.open(UI_TIME_FILE, "w", true);
+  File f = MXFS.open(UI_TIME_FILE, "w", true);
   if (f) { f.write((uint8_t*)&t, 4); f.close(); }
   _disp->startFrame();
   g().setTextColor(BLACK);
@@ -965,8 +973,12 @@ void UITask::printStatus() {
   Serial.printf(" name=%s contacts=%d msgs=%d unread=%d ble=%d conn=%d pin=%06u\n", _prefs->node_name, the_mesh.getNumContacts(),
                 _store.count(), _store.totalUnread(), isBluetoothEnabled(), hasConnection(), (unsigned)the_mesh.getBLEPin());
   Serial.printf(" clock=%u valid=%d heap=%u psram=%u spiffs=%u/%u refreshes=%u\n", (unsigned)rtc_clock.getCurrentTime(), clockValid(),
-                (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getFreePsram(), (unsigned)SPIFFS.usedBytes(), (unsigned)SPIFFS.totalBytes(),
+                (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getFreePsram(), (unsigned)MXFS.usedBytes(), (unsigned)MXFS.totalBytes(),
                 (unsigned)_disp->refreshCount());
+#ifdef ESP32_USE_LITTLEFS
+  { int mf = 0, mb = 0; int mr = mxStorageMigration(&mf, &mb);
+    Serial.printf(" storage: LittleFS migration=%d files=%d bytes=%d\n", mr, mf, mb); }
+#endif
   Serial.printf(" tsync: suspect=%d active=%d failed=%d off=%d next_in=%ds\n", _clock_suspect, _tsync_active, _tsync_failed, _cfg.gps_no_tsync,
                 (int)((int32_t)(_tsync_next - millis()) / 1000));
   Serial.printf(" stack: loop task min free %u of %u bytes\n",
@@ -1085,18 +1097,44 @@ void UITask::serialCommand(char* line) {
     Serial.println("OK");
     return;
   }
+  if (strcmp(line, "!blobtest") == 0) {         // test console: time advert blob put/get/delete
+    extern DataStore store;
+    uint8_t key[32]; for (int i = 0; i < 32; i++) key[i] = 0xA0 + i;
+    uint8_t blob[150]; for (int i = 0; i < 150; i++) blob[i] = i; uint8_t back[255];
+    uint32_t t0 = millis(); bool p = store.putBlobByKey(key, 32, blob, sizeof(blob));
+    uint32_t t1 = millis(); uint8_t g = store.getBlobByKey(key, 32, back);
+    uint32_t t2 = millis(); store.deleteBlobByKey(key, 32);
+    uint32_t t3 = millis(); uint8_t g2 = store.getBlobByKey(key, 32, back);
+    Serial.printf("OK put=%d %u ms, get=%u bytes %u ms (match=%d), delete %u ms, after delete=%u\n", p, (unsigned)(t1 - t0),
+                  g, (unsigned)(t2 - t1), g == sizeof(blob) && memcmp(back, blob, g) == 0, (unsigned)(t3 - t2), g2);
+    return;
+  }
+  if (strcmp(line, "!fssmall") == 0) {          // test console: time small-file writes (advert blobs live in /bl)
+    static uint8_t b[140]; memset(b, 0x33, sizeof(b));
+    const char* paths[] = { "/bltest/TESTBLOB0001", "/smalltest.bin" };
+    for (const char* p : paths) {
+      uint32_t t0 = millis();
+      File f = MXFS.open(p, "w", true); uint32_t t1 = millis();
+      f.write(b, sizeof(b)); f.close(); uint32_t t2 = millis();
+      File g = MXFS.open(p, "w"); g.write(b, sizeof(b)); g.close(); uint32_t t3 = millis();
+      MXFS.remove(p); uint32_t t4 = millis();
+      Serial.printf("OK %s: create-open %u, write+close %u, rewrite %u, remove %u ms\n", p,
+                    (unsigned)(t1 - t0), (unsigned)(t2 - t1), (unsigned)(t3 - t2), (unsigned)(t4 - t3));
+    }
+    return;
+  }
   if (strcmp(line, "!fstest") == 0) {           // test console: time the flash file system steps
     static uint8_t buf[2432]; memset(buf, 0x5A, sizeof(buf));
     uint32_t t0 = millis();
-    File f = SPIFFS.open("/fstest.tmp", "w", true);
+    File f = MXFS.open("/fstest.tmp", "w", true);
     uint32_t t1 = millis();
     for (int i = 0; i < 24; i++) f.write(buf, sizeof(buf));
     uint32_t t2 = millis();
     f.close();
     uint32_t t3 = millis();
-    SPIFFS.rename("/fstest.tmp", "/fstest.bin");
+    MXFS.rename("/fstest.tmp", "/fstest.bin");
     uint32_t t4 = millis();
-    SPIFFS.remove("/fstest.bin");
+    MXFS.remove("/fstest.bin");
     uint32_t t5 = millis();
     uint32_t t6 = millis(); uint32_t n = 0;
     { ContactInfo c; while (the_mesh.getContactByIdx(n, c)) n++; }
@@ -1109,9 +1147,9 @@ void UITask::serialCommand(char* line) {
   if (strcmp(line, "!savecontacts") == 0) {     // test console: force a contacts save, show the files
     uint32_t t0 = millis();
     the_mesh.uiSaveContactsSoon(); the_mesh.uiFlushContacts();
-    File f = SPIFFS.open("/contacts3", "r"); size_t sz = f ? f.size() : 0; if (f) f.close();
+    File f = MXFS.open("/contacts3", "r"); size_t sz = f ? f.size() : 0; if (f) f.close();
     Serial.printf("OK saved in %ums: /contacts3=%u bytes (%u contacts) tmp_left=%d\n", (unsigned)(millis() - t0), (unsigned)sz,
-                  (unsigned)(sz / 152), (int)SPIFFS.exists("/contacts3.tmp"));
+                  (unsigned)(sz / 152), (int)MXFS.exists("/contacts3.tmp"));
     return;
   }
   if (strcmp(line, "!clocklost") == 0) {        // test console: behave as after a power loss
@@ -1217,10 +1255,16 @@ void UITask::loop() {
   if ((_time_saved_at == 0 || millis() - _time_saved_at > 5UL * 60 * 1000) && clockValid()) {   // remember the time every 5 min
     _time_saved_at = millis() | 1;
     uint32_t t = rtc_clock.getCurrentTime();
-    File f = SPIFFS.open(UI_TIME_FILE, "w", true);
+    File f = MXFS.open(UI_TIME_FILE, "w", true);
     if (f) { f.write((uint8_t*)&t, 4); f.close(); }
   }
   _store.saveIfNeeded(_scr == SCR_LOCK);
+#ifdef ESP32_USE_LITTLEFS
+  // tidy leftovers of an old storage layout, a step at a time, only while locked and idle
+  static uint32_t s_cleanup_next = 0;
+  if (_scr == SCR_LOCK && now - _last_input > 10000 && (int32_t)(now - s_cleanup_next) >= 0 && !the_mesh.hasPendingWork())
+    s_cleanup_next = now + (mxStorageIdleCleanup() ? 3000 : 3600000UL);
+#endif
 
   if (_dirty) {
     _dirty = false;
@@ -2412,7 +2456,7 @@ void UITask::drawDevice() {
   buildChannels();
   snprintf(l, sizeof(l), "Contacts %d/%d  Channels %d", the_mesh.getNumContacts(), MAX_CONTACTS, s_nchan); putText(g(), 4, y, l); y += 12;
   snprintf(l, sizeof(l), "Messages stored %d/%d", _store.count(), MSG_STORE_SIZE); putText(g(), 4, y, l); y += 12;
-  snprintf(l, sizeof(l), "Storage %u/%u KB", (unsigned)(SPIFFS.usedBytes() / 1024), (unsigned)(SPIFFS.totalBytes() / 1024)); putText(g(), 4, y, l); y += 12;
+  snprintf(l, sizeof(l), "Storage %u/%u KB", (unsigned)(MXFS.usedBytes() / 1024), (unsigned)(MXFS.totalBytes() / 1024)); putText(g(), 4, y, l); y += 12;
   snprintf(l, sizeof(l), "Free heap %u KB  PSRAM %u KB", (unsigned)(ESP.getFreeHeap() / 1024), (unsigned)(ESP.getFreePsram() / 1024)); putText(g(), 4, y, l); y += 12;
   uint32_t up = millis() / 1000;
   snprintf(l, sizeof(l), "Uptime %ud %uh %um", (unsigned)(up / 86400), (unsigned)((up / 3600) % 24), (unsigned)((up / 60) % 60)); putText(g(), 4, y, l); y += 12;

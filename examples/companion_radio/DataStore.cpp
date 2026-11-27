@@ -53,11 +53,15 @@ static File openWriteSafe(FILESYSTEM* fs, const char* filename) {
 static void commitSafe(FILESYSTEM* fs, const char* filename, bool ok) {
   char tmp[40]; snprintf(tmp, sizeof(tmp), "%s" SAFE_TMP_SUFFIX, filename);
   if (!ok) { fs->remove(tmp); return; }          // keep the old, complete file
-  fs->remove(filename);
+  if (fs->rename(tmp, filename)) return;         // LittleFS: atomic replace
+  fs->remove(filename);                          // SPIFFS can't rename onto an existing file
   fs->rename(tmp, filename);
 }
 static void recoverSafe(FILESYSTEM* fs, const char* filename) {
   char tmp[40]; snprintf(tmp, sizeof(tmp), "%s" SAFE_TMP_SUFFIX, filename);
+#if defined(ESP32_USE_LITTLEFS)
+  { char p[60]; snprintf(p, sizeof(p), "/littlefs%s", tmp); struct stat st; if (stat(p, &st) != 0) return; }   // quiet check
+#endif
   if (!fs->exists(tmp)) return;
   if (fs->exists(filename)) fs->remove(tmp);     // cut short while writing: the old file is the good one
   else fs->rename(tmp, filename);                // cut between "remove" and "rename": the temp copy is complete
@@ -79,6 +83,8 @@ void DataStore::begin() {
   #if defined(EXTRAFS) || defined(QSPIFLASH)
   migrateToSecondaryFS();
   #endif
+#elif defined(ESP32_USE_LITTLEFS)
+  // blobs live in one file (MxBlobStore.h), loaded on first use
 #else
   // init 'blob store' support
   _fs->mkdir("/bl");
@@ -87,7 +93,9 @@ void DataStore::begin() {
 
 #if defined(ESP32)
   #include <SPIFFS.h>
+  #include <LittleFS.h>
   #include <nvs_flash.h>
+  #include <sys/stat.h>
 #elif defined(RP2040_PLATFORM)
   #include <LittleFS.h>
 #elif defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
@@ -123,7 +131,9 @@ lfs_ssize_t _getLfsUsedBlockCount(FILESYSTEM* fs) {
 #endif
 
 uint32_t DataStore::getStorageUsedKb() const {
-#if defined(ESP32)
+#if defined(ESP32) && defined(ESP32_USE_LITTLEFS)
+  return LittleFS.usedBytes() / 1024;
+#elif defined(ESP32)
   return SPIFFS.usedBytes() / 1024;
 #elif defined(RP2040_PLATFORM)
   FSInfo info;
@@ -141,7 +151,9 @@ uint32_t DataStore::getStorageUsedKb() const {
 }
 
 uint32_t DataStore::getStorageTotalKb() const {
-#if defined(ESP32)
+#if defined(ESP32) && defined(ESP32_USE_LITTLEFS)
+  return LittleFS.totalBytes() / 1024;
+#elif defined(ESP32)
   return SPIFFS.totalBytes() / 1024;
 #elif defined(RP2040_PLATFORM)
   FSInfo info;
@@ -195,7 +207,11 @@ bool DataStore::formatFileSystem() {
 #elif defined(RP2040_PLATFORM)
   return LittleFS.format();
 #elif defined(ESP32)
+#if defined(ESP32_USE_LITTLEFS)
+  bool fs_success = ((fs::LittleFSFS *)_fs)->format();
+#else
   bool fs_success = ((fs::SPIFFSFS *)_fs)->format();
+#endif
   esp_err_t nvs_err = nvs_flash_erase(); // no need to reinit, will be done by reboot
   return fs_success && (nvs_err == ESP_OK);
 #else
@@ -633,6 +649,49 @@ bool DataStore::putBlobByKey(const uint8_t key[], int key_len, const uint8_t src
 }
 bool DataStore::deleteBlobByKey(const uint8_t key[], int key_len) {
   return true; // this is just a stub on NRF52/STM32 platforms
+}
+#elif defined(ESP32_USE_LITTLEFS)
+#include "MxBlobStore.h"
+static MxBlobRec* s_blobs = nullptr;
+
+static bool mxbLoad(FILESYSTEM* fs) {
+  if (s_blobs) return true;
+  s_blobs = (MxBlobRec*)ps_calloc(MXB_RECS, sizeof(MxBlobRec));
+  if (!s_blobs) return false;
+  mxbReadAll(*fs, s_blobs);
+  if (mxExists(MXB_LEGACY_FILE)) fs->remove(MXB_LEGACY_FILE);
+  return true;
+}
+
+static int mxbFind(const uint8_t key[], int key_len) {
+  int found = 0, i = mxbPlace(s_blobs, key, key_len, &found);
+  return found ? i : -1;
+}
+
+uint8_t DataStore::getBlobByKey(const uint8_t key[], int key_len, uint8_t dest_buf[]) {
+  if (!mxbLoad(_fs)) return 0;
+  int i = mxbFind(key, key_len);
+  if (i < 0) return 0;
+  memcpy(dest_buf, s_blobs[i].data, s_blobs[i].len);
+  return s_blobs[i].len;
+}
+
+bool DataStore::putBlobByKey(const uint8_t key[], int key_len, const uint8_t src_buf[], uint8_t len) {
+  if (len == 0 || len > MXB_DATA || !mxbLoad(_fs)) return false;
+  int i = mxbPlace(s_blobs, key, key_len);
+  MxBlobRec& r = s_blobs[i];
+  memset(&r, 0, sizeof(r));
+  memcpy(r.key, key, key_len < 8 ? key_len : 8);
+  r.len = len; r.ts = _clock->getCurrentTime();
+  memcpy(r.data, src_buf, len);
+  return mxbWriteShard(*_fs, s_blobs, i / MXB_PER);
+}
+
+bool DataStore::deleteBlobByKey(const uint8_t key[], int key_len) {
+  if (!mxbLoad(_fs)) return true;
+  int i = mxbFind(key, key_len);
+  if (i >= 0) { memset(&s_blobs[i], 0, sizeof(MxBlobRec)); mxbWriteShard(*_fs, s_blobs, i / MXB_PER); }
+  return true;
 }
 #else
 inline void makeBlobPath(const uint8_t key[], int key_len, char* path, size_t path_size) {

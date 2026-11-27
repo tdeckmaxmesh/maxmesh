@@ -101,6 +101,10 @@ MultiSerialInterface interface_manager;
 #elif defined(RP2040_PLATFORM)
   #include <LittleFS.h>
   DataStore store(LittleFS, rtc_clock);
+#elif defined(ESP32) && defined(ESP32_USE_LITTLEFS)
+  #include <LittleFS.h>
+  #include "MxStorage.h"
+  DataStore store(LittleFS, rtc_clock);
 #elif defined(ESP32)
   #include <SPIFFS.h>
   DataStore store(SPIFFS, rtc_clock);
@@ -175,6 +179,18 @@ void setup() {
   the_mesh.begin();
 #elif defined(RP2040_PLATFORM)
   LittleFS.begin();
+  store.begin();
+  the_mesh.begin();
+#elif defined(ESP32) && defined(ESP32_USE_LITTLEFS)
+  #ifdef DISPLAY_CLASS
+  if (!mxStorageBegin(disp)) {
+    if (disp) { disp->startFrame(); disp->drawTextCentered(disp->width() / 2, 120, "Storage upgrade failed");
+                disp->drawTextCentered(disp->width() / 2, 145, "Data kept. Reflash v1.2"); disp->endFrame(); }
+    halt();
+  }
+  #else
+  if (!mxStorageBegin(NULL)) halt();
+  #endif
   store.begin();
   the_mesh.begin();
 #elif defined(ESP32)
