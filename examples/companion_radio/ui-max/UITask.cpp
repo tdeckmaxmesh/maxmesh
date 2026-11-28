@@ -877,9 +877,12 @@ void UITask::busyPoll() {
   _in_busy = false;
 }
 
+static bool s_inject_tap = false;   // test console: !tap
+
 void UITask::handleButton() {
   bool down = digitalRead(MAX_BOOT_BTN) == LOW;
-  bool latched = board.takeButtonPress();      // catches taps we were too busy/asleep to see
+  bool latched = board.takeButtonPress();
+  if (s_inject_tap) { s_inject_tap = false; latched = true; delay(2); }   // as if a tap woke us      // catches taps we were too busy/asleep to see
   uint32_t now = millis();
   if ((down || latched) && !_btn_prev) { _btn_down = now; _btn_long_done = false; _btn_prev = true; }
   if (down && !_btn_long_done && now - _btn_down > 2500) {
@@ -1099,6 +1102,11 @@ void UITask::serialCommand(char* line) {
     Serial.println("OK");
     return;
   }
+  if (strcmp(line, "!tap") == 0) {              // test console: a side-button tap through the real button code
+    s_inject_tap = true;
+    Serial.println("OK");
+    return;
+  }
   if (strcmp(line, "!cleanup") == 0) {          // test console: finish removing old-layout leftovers now
 #ifdef ESP32_USE_LITTLEFS
     uint32_t t0 = millis(); int steps = 0;
@@ -1257,7 +1265,7 @@ void UITask::loop() {
   gpsPowerSync();
 
   // auto-lock
-  if (_cfg.lock_secs && _scr != SCR_LOCK && now - _last_input > (uint32_t)_cfg.lock_secs * 1000UL) {
+  if (_cfg.lock_secs && _scr != SCR_LOCK && (int32_t)(now - _last_input) > (int32_t)(_cfg.lock_secs * 1000UL)) {
     go(SCR_LOCK);          // an open dialog (and what was typed) is kept for after unlocking
     applyLights();
     _need_full = true;
@@ -1275,7 +1283,7 @@ void UITask::loop() {
   // tidy leftovers of an old storage layout, a step at a time, only while locked and idle
   static uint32_t s_cleanup_next = 0;
   // (each step can block ~1-3 s, so only when locked, untouched for 2 min and charging - never while in use)
-  if (_scr == SCR_LOCK && _usb && now - _last_input > 120000 && (int32_t)(now - s_cleanup_next) >= 0 && !the_mesh.hasPendingWork())
+  if (_scr == SCR_LOCK && _usb && (int32_t)(now - _last_input) > 120000 && (int32_t)(now - s_cleanup_next) >= 0 && !the_mesh.hasPendingWork())
     s_cleanup_next = now + (mxStorageIdleCleanup() ? 3000 : 3600000UL);
 #endif
 
@@ -1290,7 +1298,7 @@ void UITask::loop() {
   // (no light sleep while the frontlight is on: its PWM clock stops in sleep -> flicker)
   bool can_sleep = !_usb && !_fake_batt_mv && !isBluetoothEnabled() && !_gps_pow && !_dirty && board.getFrontlight() == 0
                    && !keyboard.keyHeld() && !the_mesh.hasPendingWork() && _pend_kind == 0
-                   && now - _last_input > 3000 && now - _boot_ms > 15000;
+                   && (int32_t)(now - _last_input) > 3000 && now - _boot_ms > 15000;
   if (can_sleep) {
     for (int i = _store.count() - 1, n = 0; i >= 0 && n < 20; i--, n++)
       if (_store.at(i)->status == MS_SENDING) { can_sleep = false; break; }
