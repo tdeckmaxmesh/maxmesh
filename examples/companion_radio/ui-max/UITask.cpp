@@ -899,8 +899,10 @@ void UITask::handleButton() {
   }
   if (!down && _btn_prev) {                    // released (or a tap seen only via the latch)
     _btn_prev = false;
-    // ignore contact bounce / impatient double-presses right after a lock or unlock
-    if (!_btn_long_done && now - _btn_last_toggle > 800) {
+    // ignore contact bounce / impatient double-presses right after a lock or unlock. Re-locking within 2 s
+    // of an unlock is never intended (it's a delayed or repeated unlock press), so that gap is longer.
+    uint32_t gap = (_scr == SCR_LOCK) ? 800 : 2000;
+    if (!_btn_long_done && now - _btn_last_toggle > gap) {
       _btn_last_toggle = now;
       if (_scr == SCR_LOCK) back();            // unlock: quick partial refresh
       else { go(SCR_LOCK); _need_full = true; }   // lock: clean full refresh
@@ -1097,6 +1099,16 @@ void UITask::serialCommand(char* line) {
     Serial.println("OK");
     return;
   }
+  if (strcmp(line, "!cleanup") == 0) {          // test console: finish removing old-layout leftovers now
+#ifdef ESP32_USE_LITTLEFS
+    uint32_t t0 = millis(); int steps = 0;
+    while (mxStorageIdleCleanup()) { if (++steps % 25 == 0) { Serial.printf("cleanup: %d steps, %u s\n", steps, (unsigned)((millis() - t0) / 1000)); } }
+    Serial.printf("OK cleanup done: %d steps in %u s, used %u KB\n", steps, (unsigned)((millis() - t0) / 1000), (unsigned)(MXFS.usedBytes() / 1024));
+#else
+    Serial.println("OK nothing to do");
+#endif
+    return;
+  }
   if (strcmp(line, "!blobtest") == 0) {         // test console: time advert blob put/get/delete
     extern DataStore store;
     uint8_t key[32]; for (int i = 0; i < 32; i++) key[i] = 0xA0 + i;
@@ -1262,7 +1274,8 @@ void UITask::loop() {
 #ifdef ESP32_USE_LITTLEFS
   // tidy leftovers of an old storage layout, a step at a time, only while locked and idle
   static uint32_t s_cleanup_next = 0;
-  if (_scr == SCR_LOCK && now - _last_input > 10000 && (int32_t)(now - s_cleanup_next) >= 0 && !the_mesh.hasPendingWork())
+  // (each step can block ~1-3 s, so only when locked, untouched for 2 min and charging - never while in use)
+  if (_scr == SCR_LOCK && _usb && now - _last_input > 120000 && (int32_t)(now - s_cleanup_next) >= 0 && !the_mesh.hasPendingWork())
     s_cleanup_next = now + (mxStorageIdleCleanup() ? 3000 : 3600000UL);
 #endif
 
