@@ -270,13 +270,19 @@ void TDeckMaxBoard::lightSleepUntilEvent(uint32_t max_ms) {
   esp_sleep_enable_gpio_wakeup();
 
   esp_light_sleep_start();
+  bool woke_by_pin = esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_GPIO;
 
   gpio_wakeup_disable((gpio_num_t)P_LORA_DIO_1);
   gpio_wakeup_disable((gpio_num_t)MAX_KB_INT);
   gpio_wakeup_disable((gpio_num_t)MAX_BOOT_BTN);
   gpio_set_intr_type((gpio_num_t)MAX_KB_INT, GPIO_INTR_DISABLE);      // polled, no ISR
   gpio_set_intr_type((gpio_num_t)MAX_BOOT_BTN, GPIO_INTR_NEGEDGE);    // back to the press latch
-  if (gpio_get_level((gpio_num_t)MAX_BOOT_BTN) == 0) s_btn_pressed = true;   // the press that woke us
+  // The press that woke us. A quick tap can already be released by now (and its edge happened while the
+  // edge interrupt was off), so also count a pin wake-up that the radio and keyboard don't explain: their
+  // lines stay asserted until serviced, the button's doesn't.
+  if (gpio_get_level((gpio_num_t)MAX_BOOT_BTN) == 0 ||
+      (woke_by_pin && gpio_get_level((gpio_num_t)P_LORA_DIO_1) == 0 && gpio_get_level((gpio_num_t)MAX_KB_INT) == 1))
+    s_btn_pressed = true;
   gpio_set_intr_type((gpio_num_t)P_LORA_DIO_1, GPIO_INTR_POSEDGE);    // RadioLib's rising-edge ISR
   portEXIT_CRITICAL(&mux);
 }
